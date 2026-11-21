@@ -86,7 +86,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'plugins/**', 'tests/**') }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-
       - name: Configure
