@@ -204,7 +204,7 @@ jobs:
           done
 
           ls -l dist/*.tar.gz
-          tar -tzf "spark-client-plugins_${version}_all.tar.gz"
+          tar -tzf "dist/spark-client-plugins_${version}_all.tar.gz"
 
       - name: Publish the release
         env:
