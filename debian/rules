@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+
+# The SDK headers come from an installed sparkapp-core, or from a checkout
+# passed through SPARK_PLUGIN_SDK_INCLUDE_DIR when building the official
+# packages in CI.
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DSPARK_PLUGIN_SDK_INCLUDE_DIR="$(SPARK_PLUGIN_SDK_INCLUDE_DIR)" \
+		-DSPARK_PLUGINS_BUILD_TESTS=ON \
+		-DCMAKE_INSTALL_LIBDIR=lib/$(DEB_HOST_MULTIARCH)

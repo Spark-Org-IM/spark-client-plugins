@@ -6,3 +6,11 @@ build*/
 *.tar.gz
 compile_commands.json
 .cache/
+obj-*/
+debian/.debhelper/
+debian/tmp/
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/sparkapp-plugin-news/
+debian/sparkapp-plugin-forum/

@@ -1,0 +1,26 @@
+Source: spark-client-plugins
+Section: utils
+Priority: optional
+Maintainer: Jianyin Li <jianyin@sparkorg.dpdns.org>
+Build-Depends: debhelper-compat (= 13), cmake, ninja-build
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/Spark-Org-IM/spark-client-plugins
+Vcs-Git: https://github.com/Spark-Org-IM/spark-client-plugins.git
+Vcs-Browser: https://github.com/Spark-Org-IM/spark-client-plugins
+
+Package: sparkapp-plugin-news
+Architecture: any
+Depends: sparkapp-core, spark-plugin-abi-1, ${shlibs:Depends}, ${misc:Depends}
+Description: Spark ORG news management plugin
+ Optional plugin for the Spark ORG clients. Adds news editing, deletion
+ and home-page pick management actions. Requests are proxied by the
+ client, so the plugin never receives account tokens.
+
+Package: sparkapp-plugin-forum
+Architecture: any
+Depends: sparkapp-core, spark-plugin-abi-1, ${shlibs:Depends}, ${misc:Depends}
+Description: Spark ORG forum management plugin
+ Optional plugin for the Spark ORG clients. Adds discussion creation,
+ replies, moderation (sticky, locked, hidden) and deletion. The plugin
+ uses the forum account through the client and never receives tokens.

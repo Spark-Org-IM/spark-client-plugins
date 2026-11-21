@@ -34,14 +34,19 @@ ctest --test-dir build --output-on-failure
 ```
 
 产物是 `build/spark-manage-news.so` 和 `build/spark-manage-forum.so`。
-需要 Debian 包时再运行：
+
+需要 Debian 二进制包和源码包时，用仓库自带的 `debian/`：
 
 ```sh
-cd build && cpack -G DEB
+SPARK_PLUGIN_SDK_INCLUDE_DIR=/path/to/spark-client/src \
+  dpkg-buildpackage -us -uc -b -d
+packaging/build-source.sh
 ```
 
-会生成 `sparkapp-plugin-news_<version>_<arch>.deb` 和
-`sparkapp-plugin-forum_<version>_<arch>.deb`。
+- 二进制包在仓库的上级目录：
+  `sparkapp-plugin-news_<version>_<arch>.deb`、
+  `sparkapp-plugin-forum_<version>_<arch>.deb`
+- 源码包在 `build/source/`：`.dsc`、`.tar.xz`、`.changes`、`.buildinfo`
 
 ## 安装
 
@@ -84,9 +89,13 @@ cp build/spark-manage-news.so build/spark-manage-forum.so \
 - `.github/workflows/deps.yml`：每天 00:00 UTC 定时和手动运行；先升级系统包
   （编译器、CMake 等），再解析上游 `spark-client` 的插件 SDK、刷新 SDK 缓存，
   并用最新 SDK 重新构建测试。
-- `.github/workflows/release.yml`：合并到 `main` 后构建所有架构，把全部
-  `.deb` 和插件模块打成**一个** tar
-  （`spark-client-plugins_<version>_all.tar.gz`）并发布为 `v<version>`。
+- `.github/workflows/release.yml`：合并到 `main` 后构建所有架构和源码包，
+  发布 **3 个** tar 并发布为 `v<version>`：
+  - `spark-client-plugins_<version>_linux-amd64.tar.gz`：amd64 `.so`
+  - `spark-client-plugins_<version>_linux-arm64.tar.gz`：arm64 `.so`
+  - `spark-client-plugins_<version>_all.tar.gz`：所有发布文件（两个架构的
+    `.deb`、`.changes`、`.buildinfo`、源码包、`.so`、文档和 `SHA256SUMS`）
+
   插件不等待 tag；非 `main` 分支只检查，不发布。
 
 ## 许可证

@@ -1,8 +1,11 @@
 name: release
 
-# Plugins do not wait for a tag. Merging to main builds every architecture and
-# publishes a single tar that contains all released plugin modules. Other
-# branches only run the ci workflow and never publish.
+# Plugins do not wait for a tag. Merging to main builds both architectures,
+# the Debian source package, and publishes three tars:
+#   - linux-amd64 shared objects
+#   - linux-arm64 shared objects
+#   - all release files (debs, source package, modules and docs)
+# Other branches only run the ci workflow and never publish.
 on:
   push:
     branches:
@@ -11,8 +14,6 @@ on:
 permissions:
   contents: read
 
-# ccache is content-keyed; hashing the compiler binary keeps the cache usable
-# after package upgrades that only touch file timestamps.
 env:
   CCACHE_COMPILERCHECK: content
   CCACHE_MAXSIZE: 200M
@@ -33,7 +34,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out
         uses: actions/checkout@v7
@@ -42,7 +43,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build ccache
+            build-essential cmake ninja-build ccache debhelper dpkg-dev
+
+      - name: Check version metadata
+        run: packaging/sync-version.sh --check
 
       - name: Resolve plugin SDK revision
         id: sdk
@@ -84,50 +88,67 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'plugins/**', 'tests/**') }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'plugins/**', 'tests/**', 'debian/**') }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-
-      - name: Configure
-        run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DSPARK_PLUGIN_SDK_INCLUDE_DIR="$PWD/.sdk/spark-client/src" \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
-      - name: Build
-        run: cmake --build build --parallel 4
-
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      - name: Build Debian packages
+        env:
+          SPARK_PLUGIN_SDK_INCLUDE_DIR: ${{ github.workspace }}/.sdk/spark-client/src
+        run: dpkg-buildpackage -us -uc -b -d
 
       - name: ccache statistics
         run: ccache --show-stats
 
-      - name: Package .deb
-        run: |
-          cd build
-          cpack -G DEB
-          ls -l ./*.deb
-
       - name: Stage packages and plugin modules
         run: |
           mkdir -p "stage/linux-${{ matrix.arch }}"
-          cp build/*.deb "stage/linux-${{ matrix.arch }}/"
-          cp build/spark-manage-news.so build/spark-manage-forum.so \
-            "stage/linux-${{ matrix.arch }}/"
+          cp ../sparkapp-plugin-*.deb "stage/linux-${{ matrix.arch }}/"
+          cp ../spark-client-plugins_*.changes \
+             ../spark-client-plugins_*.buildinfo \
+             "stage/linux-${{ matrix.arch }}/"
+          find obj-* -maxdepth 1 -name 'spark-manage-*.so' \
+            -exec cp {} "stage/linux-${{ matrix.arch }}/" \;
+          ls -l "stage/linux-${{ matrix.arch }}"
 
-      - name: Upload plugin modules
+      - name: Upload packages and modules
         uses: actions/upload-artifact@v7
         with:
           name: plugins-${{ matrix.arch }}
-          # Upload the parent directory so the artifact keeps linux-<arch>/
-          # and both architectures can be merged into one bundle.
+          # Keep linux-<arch>/ so both architectures can be merged later.
           path: stage
+          if-no-files-found: error
+
+  source:
+    name: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install source packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev
+
+      - name: Build Debian source package
+        run: |
+          packaging/sync-version.sh --check
+          packaging/build-source.sh
+
+      - name: Upload source package
+        uses: actions/upload-artifact@v7
+        with:
+          name: source
+          path: build/source/*
           if-no-files-found: error
 
   publish:
     name: publish
-    needs: build
+    needs:
+      - build
+      - source
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -136,27 +157,53 @@ jobs:
       - name: Check out
         uses: actions/checkout@v7
 
-      - name: Download plugin modules
+      - name: Download packages and modules
         uses: actions/download-artifact@v8
         with:
           pattern: plugins-*
           merge-multiple: true
           path: bundle
 
-      - name: Build the release tar
+      - name: Download source package
+        uses: actions/download-artifact@v8
+        with:
+          name: source
+          path: source
+
+      - name: Build the release tars
         run: |
+          set -eu
           version=$(head -n 1 VERSION | tr -d '[:space:]')
           test -n "$version"
           folder="spark-client-plugins-${version}"
-          mkdir -p "release/${folder}"
-          cp -a bundle/linux-* "release/${folder}/"
-          cp README.md LICENSE VERSION "release/${folder}/"
+
+          # 1. Everything that belongs to the release.
+          mkdir -p "dist/${folder}/linux-amd64" \
+                   "dist/${folder}/linux-arm64" \
+                   "dist/${folder}/source"
+          cp bundle/linux-amd64/* "dist/${folder}/linux-amd64/"
+          cp bundle/linux-arm64/* "dist/${folder}/linux-arm64/"
+          cp source/* "dist/${folder}/source/"
+          cp README.md LICENSE VERSION "dist/${folder}/"
           (
-            cd "release/${folder}"
-            sha256sum linux-*/*.deb linux-*/*.so > SHA256SUMS
+            cd "dist/${folder}"
+            find . -type f ! -name SHA256SUMS -printf '%P\n' | sort \
+              | xargs -r sha256sum > SHA256SUMS
           )
-          tar -C release -czf \
-            "spark-client-plugins_${version}_all.tar.gz" "${folder}"
+          tar -C dist -czf \
+            "dist/spark-client-plugins_${version}_all.tar.gz" "${folder}"
+
+          # 2./3. Per-architecture shared objects.
+          for arch in amd64 arm64; do
+            name="spark-client-plugins-${version}-linux-${arch}"
+            mkdir -p "dist/${name}"
+            cp "bundle/linux-${arch}"/*.so "dist/${name}/"
+            tar -C dist -czf \
+              "dist/spark-client-plugins_${version}_linux-${arch}.tar.gz" \
+              "${name}"
+          done
+
+          ls -l dist/*.tar.gz
           tar -tzf "spark-client-plugins_${version}_all.tar.gz"
 
       - name: Publish the release
@@ -164,16 +211,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(head -n 1 VERSION | tr -d '[:space:]')
-          asset="spark-client-plugins_${version}_all.tar.gz"
           tag="v${version}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$asset" --clobber
+            gh release upload "$tag" dist/*.tar.gz --clobber
           else
             # The tag normally does not exist yet, so the release creates it.
-            # If a stale tag is already there, fall back to uploading.
-            gh release create "$tag" "$asset" \
+            gh release create "$tag" dist/*.tar.gz \
               --target "$GITHUB_SHA" \
               --title "Plugins v${version}" \
               --generate-notes \
-              || gh release upload "$tag" "$asset" --clobber
+              || gh release upload "$tag" dist/*.tar.gz --clobber
           fi
