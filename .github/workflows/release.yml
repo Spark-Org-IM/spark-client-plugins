@@ -113,7 +113,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: plugins-${{ matrix.arch }}
-          path: stage/linux-${{ matrix.arch }}
+          # Upload the parent directory so the artifact keeps linux-<arch>/
+          # and both architectures can be merged into one bundle.
+          path: stage
           if-no-files-found: error
 
   publish:
