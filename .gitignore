@@ -1,0 +1,8 @@
+build*/
+*.so
+*.dylib
+*.dll
+*.deb
+*.tar.gz
+compile_commands.json
+.cache/

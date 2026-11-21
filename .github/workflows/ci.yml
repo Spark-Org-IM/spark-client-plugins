@@ -1,0 +1,106 @@
+name: ci
+
+# Feature branches and every pull request build and test the plugins. Nothing
+# is published here. Pushes to main are covered by the release workflow, which
+# runs the same checks before uploading artifacts.
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# ccache is content-keyed; hashing the compiler binary keeps the cache usable
+# after package upgrades that only touch file timestamps.
+env:
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 200M
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build ccache
+
+      - name: Resolve plugin SDK revision
+        id: sdk
+        run: |
+          sha=$(git ls-remote https://github.com/Spark-Org-IM/spark-client.git \
+                  refs/heads/main | cut -f1)
+          if [ -z "$sha" ]; then
+            echo "cannot resolve the spark-client main branch" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached plugin SDK
+        id: sdk-cache
+        uses: actions/cache@v6
+        with:
+          path: .sdk/spark-client
+          key: spark-client-sdk-${{ steps.sdk.outputs.sha }}
+
+      - name: Fetch plugin SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .sdk
+          git clone --depth 1 \
+            https://github.com/Spark-Org-IM/spark-client.git \
+            .sdk/spark-client
+
+      - name: Check plugin SDK
+        run: |
+          test -f .sdk/spark-client/src/plugin/api.h
+          test -f .sdk/spark-client/src/plugin/sdk.h
+          abi=$(sed -n \
+            's/^#define SPARK_PLUGIN_ABI_VERSION \([0-9][0-9]*\)u*$/\1/p' \
+            .sdk/spark-client/src/plugin/api.h)
+          echo "spark-client SDK ABI: ${abi:-unknown}"
+          test -n "$abi"
+
+      - name: Restore ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'plugins/**', 'tests/**') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSPARK_PLUGIN_SDK_INCLUDE_DIR="$PWD/.sdk/spark-client/src" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: ccache statistics
+        run: ccache --show-stats

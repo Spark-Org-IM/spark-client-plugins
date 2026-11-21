@@ -1,0 +1,170 @@
+name: release
+
+# Plugins do not wait for a tag. Merging to main builds every architecture and
+# publishes a single tar that contains all released plugin modules. Other
+# branches only run the ci workflow and never publish.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# ccache is content-keyed; hashing the compiler binary keeps the cache usable
+# after package upgrades that only touch file timestamps.
+env:
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 200M
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build ccache
+
+      - name: Resolve plugin SDK revision
+        id: sdk
+        run: |
+          sha=$(git ls-remote https://github.com/Spark-Org-IM/spark-client.git \
+                  refs/heads/main | cut -f1)
+          if [ -z "$sha" ]; then
+            echo "cannot resolve the spark-client main branch" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached plugin SDK
+        id: sdk-cache
+        uses: actions/cache@v6
+        with:
+          path: .sdk/spark-client
+          key: spark-client-sdk-${{ steps.sdk.outputs.sha }}
+
+      - name: Fetch plugin SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .sdk
+          git clone --depth 1 \
+            https://github.com/Spark-Org-IM/spark-client.git \
+            .sdk/spark-client
+
+      - name: Check plugin SDK
+        run: |
+          test -f .sdk/spark-client/src/plugin/api.h
+          test -f .sdk/spark-client/src/plugin/sdk.h
+          abi=$(sed -n \
+            's/^#define SPARK_PLUGIN_ABI_VERSION \([0-9][0-9]*\)u*$/\1/p' \
+            .sdk/spark-client/src/plugin/api.h)
+          echo "spark-client SDK ABI: ${abi:-unknown}"
+          test -n "$abi"
+
+      - name: Restore ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'plugins/**', 'tests/**') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSPARK_PLUGIN_SDK_INCLUDE_DIR="$PWD/.sdk/spark-client/src" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: ccache statistics
+        run: ccache --show-stats
+
+      - name: Stage plugin modules
+        run: |
+          mkdir -p "stage/linux-${{ matrix.arch }}"
+          cp build/spark-manage-news.so build/spark-manage-forum.so \
+            "stage/linux-${{ matrix.arch }}/"
+
+      - name: Upload plugin modules
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugins-${{ matrix.arch }}
+          path: stage/linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Download plugin modules
+        uses: actions/download-artifact@v8
+        with:
+          pattern: plugins-*
+          merge-multiple: true
+          path: bundle
+
+      - name: Build the release tar
+        run: |
+          version=$(head -n 1 VERSION | tr -d '[:space:]')
+          test -n "$version"
+          folder="spark-client-plugins-${version}"
+          mkdir -p "release/${folder}"
+          cp -a bundle/linux-* "release/${folder}/"
+          cp README.md LICENSE VERSION "release/${folder}/"
+          (
+            cd "release/${folder}"
+            sha256sum linux-*/*.so > SHA256SUMS
+          )
+          tar -C release -czf \
+            "spark-client-plugins_${version}_all.tar.gz" "${folder}"
+          tar -tzf "spark-client-plugins_${version}_all.tar.gz"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(head -n 1 VERSION | tr -d '[:space:]')
+          asset="spark-client-plugins_${version}_all.tar.gz"
+          tag="v${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            # The tag normally does not exist yet, so the release creates it.
+            # If a stale tag is already there, fall back to uploading.
+            gh release create "$tag" "$asset" \
+              --target "$GITHUB_SHA" \
+              --title "Plugins v${version}" \
+              --generate-notes \
+              || gh release upload "$tag" "$asset" --clobber
+          fi
