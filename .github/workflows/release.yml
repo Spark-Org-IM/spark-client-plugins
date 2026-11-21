@@ -103,9 +103,16 @@ jobs:
       - name: ccache statistics
         run: ccache --show-stats
 
-      - name: Stage plugin modules
+      - name: Package .deb
+        run: |
+          cd build
+          cpack -G DEB
+          ls -l ./*.deb
+
+      - name: Stage packages and plugin modules
         run: |
           mkdir -p "stage/linux-${{ matrix.arch }}"
+          cp build/*.deb "stage/linux-${{ matrix.arch }}/"
           cp build/spark-manage-news.so build/spark-manage-forum.so \
             "stage/linux-${{ matrix.arch }}/"
 
@@ -146,7 +153,7 @@ jobs:
           cp README.md LICENSE VERSION "release/${folder}/"
           (
             cd "release/${folder}"
-            sha256sum linux-*/*.so > SHA256SUMS
+            sha256sum linux-*/*.deb linux-*/*.so > SHA256SUMS
           )
           tar -C release -czf \
             "spark-client-plugins_${version}_all.tar.gz" "${folder}"

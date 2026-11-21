@@ -60,7 +60,7 @@ target_include_directories(spark_plugin_json INTERFACE
 # ---------------------------------------------------------------------------
 # Plugins
 # ---------------------------------------------------------------------------
-function(spark_add_plugin target source)
+function(spark_add_plugin target component source)
   add_library(${target} MODULE "${source}")
   target_include_directories(${target} PRIVATE
     "${SPARK_PLUGIN_SDK_INCLUDE_DIR}")
@@ -70,11 +70,53 @@ function(spark_add_plugin target source)
   # spark-gui) and the plugin ids.
   set_target_properties(${target} PROPERTIES PREFIX "")
   install(TARGETS ${target}
-          LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/spark-client/plugins")
+          LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/spark-client/plugins"
+          COMPONENT ${component})
 endfunction()
 
-spark_add_plugin(spark-manage-news plugins/manage-news/manage_news.cpp)
-spark_add_plugin(spark-manage-forum plugins/manage-forum/manage_forum.cpp)
+spark_add_plugin(spark-manage-news plugin-news
+  plugins/manage-news/manage_news.cpp)
+spark_add_plugin(spark-manage-forum plugin-forum
+  plugins/manage-forum/manage_forum.cpp)
+
+# ---------------------------------------------------------------------------
+# Debian packages
+#
+# One package per plugin. They depend on the host's ABI virtual package, not
+# on an exact core version, so core and plugins can be released separately.
+# ---------------------------------------------------------------------------
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(CPACK_PACKAGE_NAME            "spark-client-plugins")
+  set(CPACK_PACKAGE_VENDOR          "Spark ORG")
+  set(CPACK_PACKAGE_VERSION         "${PROJECT_VERSION}")
+  set(CPACK_PACKAGE_CONTACT         "Jianyin Li <jianyin@sparkorg.dpdns.org>")
+  set(CPACK_RESOURCE_FILE_LICENSE   "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+  set(CPACK_DEBIAN_PACKAGE_SECTION  "utils")
+  set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+
+  set(CPACK_DEB_COMPONENT_INSTALL ON)
+  set(CPACK_COMPONENTS_ALL plugin-news plugin-forum)
+  set(CPACK_COMPONENT_PLUGIN-NEWS_DESCRIPTION
+      "Spark ORG news management plugin (save, delete, home-page picks).")
+  set(CPACK_COMPONENT_PLUGIN-FORUM_DESCRIPTION
+      "Spark ORG forum management plugin (post, reply, moderate, delete).")
+
+  set(CPACK_DEBIAN_PLUGIN-NEWS_PACKAGE_NAME  "sparkapp-plugin-news")
+  set(CPACK_DEBIAN_PLUGIN-FORUM_PACKAGE_NAME "sparkapp-plugin-forum")
+  set(CPACK_DEBIAN_PLUGIN-NEWS_PACKAGE_SOURCE  "spark-client-plugins")
+  set(CPACK_DEBIAN_PLUGIN-FORUM_PACKAGE_SOURCE "spark-client-plugins")
+
+  foreach(component plugin-news plugin-forum)
+    string(TOUPPER "${component}" upper)
+    set(CPACK_DEBIAN_${upper}_PACKAGE_SHLIBDEPS OFF)
+    set(CPACK_DEBIAN_${upper}_PACKAGE_DEPENDS
+        "sparkapp-core, spark-plugin-abi-1, libc6, libstdc++6")
+  endforeach()
+
+  set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+  set(CPACK_GENERATOR       "DEB")
+  include(CPack)
+endif()
 
 if(SPARK_PLUGINS_BUILD_TESTS AND UNIX)
   enable_testing()

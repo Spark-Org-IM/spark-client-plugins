@@ -34,10 +34,27 @@ ctest --test-dir build --output-on-failure
 ```
 
 产物是 `build/spark-manage-news.so` 和 `build/spark-manage-forum.so`。
+需要 Debian 包时再运行：
+
+```sh
+cd build && cpack -G DEB
+```
+
+会生成 `sparkapp-plugin-news_<version>_<arch>.deb` 和
+`sparkapp-plugin-forum_<version>_<arch>.deb`。
 
 ## 安装
 
-客户端按以下顺序查找插件：
+`.deb` 安装（推荐）：
+
+```sh
+sudo apt install ./sparkapp-plugin-news_*.deb ./sparkapp-plugin-forum_*.deb
+```
+
+包依赖 `sparkapp-core` 和虚拟包 `spark-plugin-abi-<N>`；旧版 core 没有插件
+SDK 时会被 `apt` 拒绝，不会装上不兼容的插件。
+
+也可以只复制共享对象。客户端按以下顺序查找插件：
 
 1. `$SPARK_PLUGIN_PATH`（冒号分隔）；
 2. `$XDG_DATA_HOME/spark-client/plugins`（默认
@@ -67,9 +84,10 @@ cp build/spark-manage-news.so build/spark-manage-forum.so \
 - `.github/workflows/deps.yml`：每天 00:00 UTC 定时和手动运行；先升级系统包
   （编译器、CMake 等），再解析上游 `spark-client` 的插件 SDK、刷新 SDK 缓存，
   并用最新 SDK 重新构建测试。
-- `.github/workflows/release.yml`：合并到 `main` 后构建所有架构，把全部插件
-  模块打成**一个** tar（`spark-client-plugins_<version>_all.tar.gz`）并发布为
-  `v<version>`。插件不等待 tag；非 `main` 分支只检查，不发布。
+- `.github/workflows/release.yml`：合并到 `main` 后构建所有架构，把全部
+  `.deb` 和插件模块打成**一个** tar
+  （`spark-client-plugins_<version>_all.tar.gz`）并发布为 `v<version>`。
+  插件不等待 tag；非 `main` 分支只检查，不发布。
 
 ## 许可证
 
